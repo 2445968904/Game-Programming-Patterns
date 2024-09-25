@@ -10,6 +10,6 @@ public class GameProgrammingEditorTarget : TargetRules
 		Type = TargetType.Editor;
 		DefaultBuildSettings = BuildSettingsVersion.V2;
 
-		ExtraModuleNames.AddRange( new string[] { "GameProgramming" } );
+		ExtraModuleNames.AddRange( new string[] { "GameProgramming","LockFree" } );
 	}
 }

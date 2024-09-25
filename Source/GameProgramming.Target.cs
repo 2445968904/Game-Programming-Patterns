@@ -10,6 +10,6 @@ public class GameProgrammingTarget : TargetRules
 		Type = TargetType.Game;
 		DefaultBuildSettings = BuildSettingsVersion.V2;
 
-		ExtraModuleNames.AddRange( new string[] { "GameProgramming" } );
+		ExtraModuleNames.AddRange( new string[] { "GameProgramming","LockFree" } );
 	}
 }
