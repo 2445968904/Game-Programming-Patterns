@@ -8,7 +8,7 @@ public class LockFree : ModuleRules
 	{
 		PCHUsage = PCHUsageMode.UseExplicitOrSharedPCHs;
 	
-		PublicDependencyModuleNames.AddRange(new string[] { "Core", "CoreUObject", "Engine", "InputCore" ,"WindowsTargetPlatform"});
+		PublicDependencyModuleNames.AddRange(new string[] { "Core", "CoreUObject", "Engine", "InputCore" ,"WindowsTargetPlatform" });
 
 		PrivateDependencyModuleNames.AddRange(new string[] {  });
 

@@ -1,8 +1,9 @@
 #pragma once
-#include "Microsoft/AllowMicrosoftPlatformAtomics.h"
+//#include "Microsoft/AllowMicrosoftPlatformAtomics.h"
 #include "Windows/WindowsPlatformAtomics.h"
-#include <windows.h>
+//#include <windows.h>
 #include <process.h>
+
 #include <thread>
 #include "CoreMinimal.h"
 #include "GenericPlatform/GenericPlatformAtomics.h"
@@ -17,10 +18,17 @@ template<typename T> struct TNode
 {
 	T Value;
 	TNode<T> * volatile pNext;
-	TNode(): Value (),pNext(nullptr){}
-	TNode(T v): Value(v),pNext(nullptr){}
+	int32 Version;
+	TNode(): Value (),pNext(nullptr),Version(){}
+	TNode(T v): Value(v),pNext(nullptr),Version(){}
 };
 
+template<typename T>
+struct TQueuePoint
+{
+	TNode<T> *Node;
+	int32 Version;
+};
 //基本的CAS用简单的语句表达,这是一个32位平台的写法,这只是想让大家看看CAS的工作原理
 
 
@@ -64,32 +72,29 @@ template<typename T>
 inline bool CAS_UE(TNode<T> * volatile * _ptr, TNode<T> * oldVal, TNode<T> * newVal)
 {
 	//上面的是UE封装的全平台，下面只是Windows的
-	return true ;
-	return InterlockedCompareExchangePointer((void * volatile *)_ptr, newVal, oldVal) == oldVal;
+	//return true ;
+	
+	return FPlatformAtomics::InterlockedCompareExchangePointer((void * volatile *)_ptr, newVal, oldVal) ==oldVal;
 //	return InterlockedCompareExchange((long *)_ptr, (long)newVal, (long)oldVal) == (long)oldVal;
 }
 
-
-template<typename T>
-bool CAS2_UE(TNode<T> * volatile * _ptr, TNode<T> * old1, uint32_t old2, TNode<T> * new1, uint32_t new2)
+inline bool CAS2(uint32_t * ptr ,uint32_t oldVal,uint32_t OldVersion ,uint32_t newVal, uint32_t& NewVersion)
 {
-	//return true ;
-	uintptr_t Comperand = reinterpret_cast<uintptr_t>(old1) | (static_cast<uintptr_t>(old2) << 64);
-	uintptr_t Exchange  = reinterpret_cast<uintptr_t>(new1) | (static_cast<uintptr_t>(new2) << 64);
-
-	// 使用 FPlatformAtomics 进行原子比较和交换
-	/*uintptr_t result = InterlockedCompareExchange(
-		reinterpret_cast<void* volatile*>(_ptr),
-		reinterpret_cast<void*>(Exchange),
-		reinterpret_cast<void*>(Comperand));
-
-	return result == reinterpret_cast<void*>(Comperand);
-*/
-	uintptr_t result =reinterpret_cast<uintptr_t>(InterlockedCompareExchangePointer(reinterpret_cast<void* volatile*>(_ptr),reinterpret_cast<void*>( Exchange), reinterpret_cast<void*>(Comperand)));
-	return result == Comperand;
-	//FPlatformAtomics
+	if(*ptr == oldVal && OldVersion == NewVersion)
+	{
+		*ptr =newVal;
+		NewVersion++;//这里叫NewVersion只是想说明这个值需要在这里修改，并且我们传进来的是这个整型的引用
+		return true ;
+	}
+	return false ;
 }
 
+template<typename T>
+bool CAS2_UE(TNode<T>* volatile* _ptr, TNode<T>* oldVal ,TNode<T>* newVal)
+{
+	newVal->Version = newVal->Version+1;
+	return FPlatformAtomics::InterlockedCompareExchangePointer((void * volatile *)_ptr, newVal, oldVal) == oldVal;
+}
 
 //栈
 template<typename T>class TLockFreeStack
@@ -140,32 +145,40 @@ TNode<T>* TLockFreeStack<T>::Pop()
 //队列
 template<typename T> class TLockFreeQueue {
     // NOTE: the order of these members is assumed by CAS2.
-    TNode<T> * volatile _pHead;
-    volatile uint32_t  _cPops;
-    TNode<T> * volatile _pTail;
-    volatile uint32_t  _cPushes;
+    //TNode<T> * volatile _pHead;
+    //volatile uint32_t  _cPops;
+    //TNode<T> * volatile _pTail;
+    //volatile uint32_t  _cPushes;
+
+	TNode<T> * volatile _pHead;
+	TNode<T> * volatile _pTail;
 
 public:
     void Add(TNode<T> * pNode);
     TNode<T> * Remove();
 
-    TLockFreeQueue(TNode<T> * pDummy) : _cPops(0), _cPushes(0)
+   
+	TLockFreeQueue(TNode<T>*pDunmy)
+		
     {
-        _pHead = _pTail = pDummy;
+		_pHead = _pTail = pDunmy;
     }
 };
 
 template<typename T> void TLockFreeQueue<T>::Add(TNode<T> * pNode) {
     pNode->pNext = NULL;
-
-    uint32_t cPushes;
-    TNode<T> * pTail;
-
+	if(!pNode) return ;
+    //TNode<T> cHead;
+    TNode<T> * pTail=nullptr;
+	int LoopNumber=0;
+	//if(pNode == _pTail) UE_LOG(LogTemp,Log,TEXT("PNodeIs_PTail"));
     while(true)
     {
-        cPushes = _cPushes;
+    	LoopNumber ++;
+    	if(LoopNumber>5) break ;
+      //  cHead = *_pHead;
         pTail = _pTail;
-
+		//pTail->pNext = pNode;
         // NOTE: The Queue has the same consideration as the Stack.  If _pTail is
         // freed on a different thread, then this code can cause an access violation.
 
@@ -173,35 +186,37 @@ template<typename T> void TLockFreeQueue<T>::Add(TNode<T> * pNode) {
         // then update the last node to point at the new node.
         if(CAS_UE(&(_pTail->pNext), reinterpret_cast<TNode<T> *>(NULL), pNode))
         {
+        	if(_pTail->pNext==_pTail)
+        	UE_LOG(LogTemp,Log,TEXT("AddNext"));
+        	
             break;
         }
         else
         {
             // Since the tail does not point at the last node,
             // need to keep updating the tail until it does.
-            CAS2_UE(&_pTail, pTail, cPushes, _pTail->pNext, cPushes + 1);
+        	UE_LOG(LogTemp,Log,TEXT("Not Add "));
+            CAS2_UE(&_pTail, pTail ,_pTail->pNext);
         }
     }
 
     // If the tail points to what we thought was the last node
     // then update the tail to point to the new node.
-    CAS2_UE(&_pTail, pTail, cPushes, pNode, cPushes + 1);
+    CAS2_UE(&_pTail, pTail, pNode);
 }
 
 template<typename T> TNode<T> * TLockFreeQueue<T>::Remove() {
-    T Value = T();
+    //T Value = T();
     TNode<T> * pHead;
-
     while(true)
     {
-        uint32_t cPops = _cPops;
-        uint32_t cPushes = _cPushes;
         pHead = _pHead;
         TNode<T> * pNext = pHead->pNext;
 
+    	if(pNext==_pHead)UE_LOG(LogTemp,Log,TEXT("NO"));
         // Verify that we did not get the pointers in the middle
         // of another update.
-        if(cPops != _cPops)
+        if(_pHead->Version != pHead->Version)
         {
             continue;
         }
@@ -215,22 +230,21 @@ template<typename T> TNode<T> * TLockFreeQueue<T>::Remove() {
             }
             // Special case if the queue has nodes but the tail
             // is just behind. Move the tail off of the head.
-            CAS2_UE(&_pTail, pHead, cPushes, pNext, cPushes + 1);
+            CAS2_UE(&_pTail, pHead,pNext);
         }
         else if(NULL != pNext)
         {
-            Value = pNext->Value;
+            //Value = pNext->Value;
             // Move the head pointer, effectively removing the node
-            if(CAS2_UE(&_pHead, pHead, cPops, pNext, cPops + 1))
+            if(CAS2_UE(&_pHead, pHead, pNext))
             {
+            	//UE_LOG(LogTemp,Log,TEXT("YES"));
                 break;
             }
+        	else UE_LOG(LogTemp,Log,TEXT("SameBut"));
         }
     }
-    if(NULL != pHead)
-    {
-        pHead->Value = Value;
-    }
+   
     return pHead;
 }
 
@@ -253,10 +267,13 @@ void CreateNode(TNode<T> * & pNode)
 	pNode->Value=rand();
 }
 
-inline void HandleWait(HANDLE & hThread)
+inline void HandleWait(FRunnableThread* Thread)
 {
-	WaitForSingleObject(hThread, INFINITE);
-	CloseHandle(hThread);
+	if (Thread)
+	{
+		Thread->WaitForCompletion(); // 等待线程完成
+		delete Thread; // 释放线程对象
+	}
 }
 
 template<typename T, int NUMTHREADS>
@@ -437,7 +454,7 @@ public:
 
     static unsigned int __stdcall QueueThreadFunc(void * pv)
     {
-        unsigned int tid = GetCurrentThreadId();
+        unsigned int tid = Windows::GetCurrentThreadId();
         ThreadData * ptd = reinterpret_cast<ThreadData *>(pv);
         if(FULL_TRACE)
         {
@@ -446,7 +463,7 @@ public:
         }
 
         unsigned int ii;
-        for(ii = 0; ii < cNodes; ++ii)
+        for(ii = 1; ii < cNodes; ++ii)
         {
         	auto x=ptd->pStress->_apNodes[ptd->thread_num * cNodes + ii];
         	auto Value = x->Value;
@@ -462,6 +479,7 @@ public:
         	//UE_LOG(LogTemp,Log,TEXT("%d removing"),tid);
         }
 
+    	
         for(ii = 0; ii < cNodes; ++ii)
         {
         	auto x = ptd->pStress->_queue.Remove();
@@ -470,7 +488,7 @@ public:
         	UE_LOG(LogTemp,Log,TEXT("tid=%d Num=%d Removing"),tid,Value);
         	std::this_thread::sleep_for(std::chrono::milliseconds(10));
         }
-
+	
         return 0;
     }
 };  // class StressQueue
