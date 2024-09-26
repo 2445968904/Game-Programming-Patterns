@@ -168,83 +168,58 @@ public:
 template<typename T> void TLockFreeQueue<T>::Add(TNode<T> * pNode) {
     pNode->pNext = NULL;
 	if(!pNode) return ;
-    //TNode<T> cHead;
     TNode<T> * pTail=nullptr;
-	int LoopNumber=0;
-	//if(pNode == _pTail) UE_LOG(LogTemp,Log,TEXT("PNodeIs_PTail"));
     while(true)
     {
-    	LoopNumber ++;
-    	if(LoopNumber>5) break ;
-      //  cHead = *_pHead;
         pTail = _pTail;
-		//pTail->pNext = pNode;
-        // NOTE: The Queue has the same consideration as the Stack.  If _pTail is
-        // freed on a different thread, then this code can cause an access violation.
-
-        // If the node that the tail points to is the last node
-        // then update the last node to point at the new node.
-        if(CAS_UE(&(_pTail->pNext), reinterpret_cast<TNode<T> *>(NULL), pNode))
+    	
+    	//如果Tail的next指针为空，就将它设置为pNode
+        if(CAS2_UE(&(_pTail->pNext), reinterpret_cast<TNode<T> *>(NULL), pNode))
         {
-        	if(_pTail->pNext==_pTail)
-        	UE_LOG(LogTemp,Log,TEXT("AddNext"));
-        	
+        	//UE_LOG(LogTemp,Log,TEXT("AddNext"));//也可以用cout
             break;
         }
         else
         {
-            // Since the tail does not point at the last node,
-            // need to keep updating the tail until it does.
-        	UE_LOG(LogTemp,Log,TEXT("Not Add "));
+            //更新Tail直到没有Next
+        	//UE_LOG(LogTemp,Log,TEXT("Not Add "));
             CAS2_UE(&_pTail, pTail ,_pTail->pNext);
         }
     }
 
-    // If the tail points to what we thought was the last node
-    // then update the tail to point to the new node.
+    //如果走了一圈我们的Tail还是以前那个Tail,我们就将它设置为Node
+	//这个函数执行主要是上面那个Break，不用保证一定成功,因为上面的else可以在下次刷新
     CAS2_UE(&_pTail, pTail, pNode);
 }
 
 template<typename T> TNode<T> * TLockFreeQueue<T>::Remove() {
-    //T Value = T();
-    TNode<T> * pHead;
+    
+    TNode<T> * pHead=nullptr;
     while(true)
     {
         pHead = _pHead;
         TNode<T> * pNext = pHead->pNext;
-
-    	if(pNext==_pHead)UE_LOG(LogTemp,Log,TEXT("NO"));
-        // Verify that we did not get the pointers in the middle
-        // of another update.
-        if(_pHead->Version != pHead->Version)
-        {
-            continue;
-        }
-        // Check if the queue is empty.
+    	
+        // 检查队列是否为空
         if(pHead == _pTail)
         {
             if(NULL == pNext)
             {
-                pHead = NULL; // queue is empty
+                pHead = NULL; // pHead 置空
                 break;
             }
-            // Special case if the queue has nodes but the tail
-            // is just behind. Move the tail off of the head.
+            //如果还有元素，说明PTail改往后移动了
             CAS2_UE(&_pTail, pHead,pNext);
         }
         else if(NULL != pNext)
-        {
-            //Value = pNext->Value;
-            // Move the head pointer, effectively removing the node
+        
             if(CAS2_UE(&_pHead, pHead, pNext))
             {
-            	//UE_LOG(LogTemp,Log,TEXT("YES"));
+            	//Head 移除成功
                 break;
             }
-        	else UE_LOG(LogTemp,Log,TEXT("SameBut"));
+        	
         }
-    }
-   
     return pHead;
 }
 
@@ -389,47 +364,12 @@ class StressQueue
     std::vector<TNode<T> *> & _apNodes;
 
 public:
-    static const unsigned int cNodes = 10;     // nodes per thread
+    static const unsigned int cNodes = 10;     // 每个线程会操作的节点量
 
     StressQueue(std::vector<TNode<T> *> & apNodes) : _queue(apNodes[0]), _aThreadData(NUMTHREADS), _apNodes(apNodes) {}
 
-    //
-    // The queue stress will spawn a number of threads (4096 in our tests), each of which will
-    // add and remove nodes on a single queue.  We expect that no access violations will occur
-    // and that the queue is empty (except for the dummy node) upon completion.
-    //
     void operator()()
     {
-    	/*
-    	UE_LOG(LogTemp,Log,TEXT("Running Queue Stress..."));
-        //std::cout << "Running Queue Stress..." << std::endl;
-
-        unsigned int ii;
-        for(ii = 0; ii < _aThreadData.size(); ++ii)
-        {
-            _aThreadData[ii].pStress = this;
-            _aThreadData[ii].thread_num = ii;
-        }
-
-        std::vector<HANDLE> aHandles(NUMTHREADS);
-        for(ii = 0; ii < aHandles.size(); ++ii)
-        {
-            unsigned int tid;
-            aHandles[ii] = (HANDLE)_beginthreadex(NULL, 0, QueueThreadFunc, &_aThreadData[ii], 0, &tid);
-        }
-
-        //
-        // Wait for the threads to exit.
-        //
-        std::for_each(aHandles.begin(), aHandles.end(), HandleWait);
-
-        //
-        // Ideas for improvement:
-        //  We could verify that there is a 1-1 mapping between values added and values removed.
-        //  Verify the count of pops in the queue matches the number of pops for each thread.
-        //
-        */
-
     	UE_LOG(LogTemp, Log, TEXT("Running Queue Stress..."));
 
     	// 初始化线程数据
@@ -456,11 +396,6 @@ public:
     {
         unsigned int tid = Windows::GetCurrentThreadId();
         ThreadData * ptd = reinterpret_cast<ThreadData *>(pv);
-        if(FULL_TRACE)
-        {
-        //    std::cout << tid << " adding" << std::endl;
-        	//UE_LOG(LogTemp,Log,TEXT("%d Adding"),tid);
-        }
 
         unsigned int ii;
         for(ii = 1; ii < cNodes; ++ii)
@@ -471,15 +406,6 @@ public:
         	UE_LOG(LogTemp,Log,TEXT("tid=%d Num=%d Adding"),tid,Value);
         	std::this_thread::sleep_for(std::chrono::milliseconds(10));
         }
-
-        if(FULL_TRACE)
-        {
-            //std::cout << tid << " removing" << std::endl;
-        	
-        	//UE_LOG(LogTemp,Log,TEXT("%d removing"),tid);
-        }
-
-    	
         for(ii = 0; ii < cNodes; ++ii)
         {
         	auto x = ptd->pStress->_queue.Remove();

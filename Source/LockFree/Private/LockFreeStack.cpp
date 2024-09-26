@@ -12,6 +12,5 @@ void ALockFreeTest::BeginPlay()
 	std::for_each(apNodes.begin(), apNodes.end(),CreateNode<int>);
 	StressQueue<int, 5> theQueue(apNodes);
 	theQueue();
-
 	std::for_each(apNodes.begin(), apNodes.end(), DeleteNode<int>);
 }
